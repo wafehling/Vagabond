@@ -1,0 +1,975 @@
+"""This is the first major programming project I have undertaken. I started this project in late August 2011. 
+Largely based off of a tutorial on Roguebasin by Jotaf."""
+
+import sys
+import libtcodpy as lbc, libtcodpy as libtcod
+import math
+from namegen import NameGen
+import joblists
+import textwrap
+import shelve
+import overmap
+import os.path
+import items
+import map 
+import objects
+import NPC
+import con_info
+# # # # # # # # # # 
+#Screen Orienting #
+# # # # # # # # # #
+
+overmap_width = 58
+overmap_height = 56
+
+BAR_WIDTH = 12
+PANEL_HEIGHT = 7
+PANEL_Y = con_info.screen_height - PANEL_HEIGHT
+
+#Limits the screen refresh rate
+LIMIT_FPS = 20
+
+FOV_LIGHT_WALLS = True
+fov_recompute = True
+torch_radius = con_info.screen_width/1.5
+
+look_mode = False
+overmap_mode = False
+inventory_mode = False
+drop_mode = False
+search_mode = False
+esc_number = 0
+
+game_state = 'playing'
+player_action = None
+game_running = False
+player_moved = True
+back = True
+
+
+def reset_clock():
+	global time_minute, time_hour, am, am_changed
+	time_minute = float(0)
+	time_hour = 6
+	am = False
+	am_changed = False
+
+#These lists handle announcements
+ann_combatdeath = []
+ann_combatd0 = []
+ann_combatd1 = []
+ann_passive_actions = []
+ann_exit = []
+total = []
+newtotal = []
+
+
+
+#Setup stuff for large map generation
+map_bsp = lbc.bsp_new_with_size(0,0,map.map_width,map.map_height)
+min_h_size = int(map.map_height/3.5)
+min_v_size = int(map.map_width/3.5)
+lbc.bsp_split_recursive(map_bsp, 0, 2, min_h_size, min_v_size, 0, 0)
+
+can_attack = 1
+
+
+overmap_con = libtcod.console_new(con_info.display_width, con_info.display_height)
+minimap_con = lbc.console_new(9, 9)
+
+def camera_move():
+	global display_width, display_height, startx, starty
+	if(map.startx + con_info.display_width/3 > player.x):
+		if map.startx > 0:
+			map.startx = map.startx - 1
+	if(map.starty + con_info.display_height/3 > player.y):
+		if map.starty > 0:
+			map.starty = map.starty - 1
+	if map.startx + con_info.display_width/1.75 < player.x:
+		if map.startx < map.map_width - con_info.display_width:
+			map.startx = map.startx + 1
+
+	if map.starty + con_info.display_height/1.75 < player.y:
+		if map.starty < map.map_height - con_info.display_height:
+			map.starty = map.starty + 1
+
+###########################
+#Movement and key controls#
+###########################
+
+
+def player_move_or_attack(dx, dy):
+	global fov_recompute
+	global map
+	global attack_mode_stat
+	global map_x, map_y
+	global player
+	x = player.x + dx
+	y = player.y + dy
+	
+	target = None
+	for object in items.objects_list:
+		if player.fighter.attack_mode_stat == True:
+			if object.fighter and object.x == x and object.y == y: 
+				target = object
+				break
+	if target is not None:
+		if target is not player:
+			fov_recompute = True
+			player.fighter.attack(target)
+	if x < map.map_width:
+		if y <map.map_height:
+			if y >= 0:
+				if x >= 0:
+					player.move(dx, dy)
+					fov_recompute = True
+	if x >= map.map_width:
+		file = shelve.open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy), 'n')
+		file['map_layout'] = map.map_map
+		file['map_x'] = player.overmapx
+		file['map_y'] = player.overmapy
+		file['objects'] = items.objects_list
+		file['player_index'] = player
+		file.close()
+		player.overmapx = player.overmapx + 1
+		items.objects_list = []
+		try:
+			os.path.exists('save/map/' + str(player.overmapx) + '-' + str(player.overmapy))
+			file = shelve.open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy), 'r')
+			map.map_map = file['map_layout']
+			player.overmapx = file['map_x']
+			player.overmapy = file['map_y']
+			items.objects_list = file['objects']
+			player = file['player_index']
+			file.close()
+			player.x = 0
+			map.startx = 0
+			map.initialize_fov()
+			fov_recompute = True
+		except:
+			map.make_map(player.overmapx, player.overmapy)
+			map.initialize_fov()
+			
+			file = shelve.open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy), 'n')
+			file['map_layout'] = map.map_map
+			file['map_x'] = player.overmapx
+			file['map_y'] = player.overmapy
+			file['objects'] = items.objects_list
+			file['player_index'] = player
+			file.close()
+			map.initialize_fov()
+			file = shelve.open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy), 'r')
+			map.map_map = file['map_layout']
+			player.overmapx = file['map_x']
+			player.overmapy = file['map_y']
+			items.objects_list = file['objects']
+			player = file['player_index']
+			file.close()
+			fov_recompute = True
+			player.x = 0
+			map.startx = 0
+	if x < 0:
+		file = shelve.open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy), 'n')
+		file['map_layout'] = map.map_map
+		file['map_x'] = player.overmapx
+		file['map_y'] = player.overmapy
+		file['objects'] = items.objects_list
+		file['player_index'] = player
+		file.close()
+		player.overmapx = player.overmapx - 1
+		items.objects_list = []
+		try:
+			os.path.exists('save/map/' + str(player.overmapx) + '-' + str(player.overmapy))
+			file = shelve.open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy), 'r')
+			map.map_map = file['map_layout']
+			player.overmapx = file['map_x']
+			player.overmapy = file['map_y']
+			items.objects_list = file['objects']
+			player = file['player_index']
+			file.close()
+			player.x = map.map_width-1
+			map.initialize_fov()
+			fov_recompute = True
+			map.startx = map.map_width - con_info.display_width
+		except:
+			map.make_map(player.overmapx, player.overmapy)
+			map.initialize_fov()
+			
+			file = shelve.open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy), 'n')
+			file['map_layout'] = map.map_map
+			file['map_x'] = player.overmapx
+			file['map_y'] = player.overmapy
+			file['objects'] = items.objects_list
+			file['player_index'] = player
+			file.close()
+			player.x = map.map_width - 1
+			file = shelve.open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy), 'r')
+			map.map_map = file['map_layout']
+			player.overmapx = file['map_x']
+			player.overmapy = file['map_y']
+			items.objects_list = file['objects']
+			player = file['player_index']
+			file.close()
+			fov_recompute = True
+			player.x = map.map_width-1
+	if y < 0:
+		file = shelve.open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy), 'n')
+		file['map_layout'] = map.map_map
+		file['map_x'] = player.overmapx
+		file['map_y'] = player.overmapy
+		file['objects'] = items.objects_list
+		file['player_index'] = player
+		file.close()
+		player.overmapy = player.overmapy - 1
+		items.objects_list = []
+		try:
+			open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy))
+			file = shelve.open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy), 'r')
+			map.map_map = file['map_layout']
+			player.overmapx = file['map_x']
+			player.overmapy = file['map_y']
+			items.objects_list = file['objects']
+			player = file['player_index']
+			file.close()
+			player.y = map.map_height-1
+			map.initialize_fov()
+			fov_recompute = True
+		except:
+			map.make_map(player.overmapx, player.overmapy)
+			map.initialize_fov()
+			
+			file = shelve.open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy), 'n')
+			file['map_layout'] = map.map_map
+			file['map_x'] = player.overmapx
+			file['map_y'] = player.overmapy
+			file['objects'] = items.objects_list
+			file['player_index'] = player
+			file.close()
+			player.y = map.map_height-1
+			
+			file = shelve.open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy), 'r')
+			map.map_map = file['map_layout']
+			player.overmapx = file['map_x']
+			player.overmapy = file['map_y']
+			items.objects_list = file['objects']
+			player = file['player_index']
+			file.close()
+			fov_recompute = True
+			player.y = map.map_height-1
+			
+	if y >= map.map_height:
+		file = shelve.open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy), 'n')
+		file['map_layout'] = map.map_map
+		file['map_x'] = player.overmapx
+		file['map_y'] = player.overmapy
+		file['objects'] = items.objects_list
+		file['player_index'] = player
+		file.close()
+		player.overmapy += 1
+		items.objects_list = []
+		try:
+			open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy))
+			file = shelve.open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy), 'r')
+			map.map_map = file['map_layout']
+			player.overmapx = file['map_x']
+			player.overmapy = file['map_y']
+			items.objects_list = file['objects']
+			player = file['player_index']
+			file.close()
+			player.y = 0
+			map.initialize_fov()
+			fov_recompute = True
+		except:
+			map.make_map(player.overmapx, player.overmapy)
+			map.initialize_fov()
+			
+			file = shelve.open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy), 'n')
+			file['map_layout'] = map.map_map
+			file['map_x'] = player.overmapx
+			file['map_y'] = player.overmapy
+			file['objects'] = items.objects_list
+			file['player_index'] = player
+			file.close()
+			player.y = 0
+			
+			file = shelve.open('save/map/' + str(player.overmapx) + '-' + str(player.overmapy), 'r')
+			map.map_map = file['map_layout']
+			player.overmapx = file['map_x']
+			player.overmapy = file['map_y']
+			items.objects_list = file['objects']
+			player = file['player_index']
+			file.close()
+			fov_recompute = True
+			player.y = 0
+
+def handle_keys():
+	global playerx, playery
+	global fov_recompute
+	global attack_mode
+	global attack_mode_stat
+	global esc_number
+	global inventory_mode, drop_mode, overmap_mode, look_mode, search_mode
+	global player_moved
+	key = libtcod.console_wait_for_keypress(True)
+	if key.vk == lbc.KEY_ENTER and lbc.KEY_ALT:
+		lbc.console_set_fullscreen(not lbc.console_is_fullscreen())
+	elif key.c == ord('i'):
+		player_action = 'didnt_take_turn'
+		inventory_mode = True
+		inv_menu()
+	elif key.c == ord('d'):
+		player_action = 'didnt_take_turn'
+		drop_mode = True
+		drop_menu()
+	elif key.c == ord('g'):
+		for object in items.objects_list:  #look for an item in the player's tile
+			if player.x == object.x:
+				if player.y == object.y:
+					if object.item:
+						object.item.pick_up()
+						fov_recompute = True
+						break
+	#Leave this before the escape check or it breaks it, messes with the esc_number variable
+	#seriously, don't touch this shit
+	elif key.c != ord('y'):
+		if esc_number == 1:
+			esc_number = 0
+			game_state == 'didnt_take_turn'
+	if key.vk == lbc.KEY_ESCAPE:
+		game_state == 'didnt_take_turn'
+		if esc_number == 0:
+			ann_exit.append("Are you sure you want to quit? Y/N")
+			esc_number = 1
+	if key.c == ord('y'):
+		if esc_number == 1:
+			return 'exit'
+			esc_number = 0
+			game_state == 'didnt_take_turn'
+
+
+	if key.c == ord('l'):
+		player_action = 'didnt_take_turn'
+		look_mode = not look_mode
+		if look_mode == True:
+			look()
+		fov_recompute = True
+	elif key.c == ord('m'):
+		overmap_mode = not overmap_mode
+		fov_recompute = True
+	elif key.c == ord('e'):
+		search_mode = not search_mode
+		print 'Pick a direction.'
+		print search_mode
+		x = player.x
+		y = player.y
+	if key.vk == lbc.KEY_F6:
+		game_state == 'didnt_take_turn'
+		fov_recompute = True
+		player.fighter.attack_mode_stat = not player.fighter.attack_mode_stat
+		if player.fighter.attack_mode_stat == True:
+			ann_passive_actions.append("You prepare yourself, moving into a fighting stance.")
+			fov_recompute = True
+		elif player.fighter.attack_mode_stat == False:
+			ann_passive_actions.append("You relax, assuming a regular stance.")
+			fov_recompute = True
+	elif key.vk == lbc.KEY_F5:
+		if player.fighter.sprint <= 3:
+			player.fighter.sprint = player.fighter.sprint + 1
+		if player.fighter.sprint == 1:
+			ann_passive_actions.append("You pick up the pace, moving at a light jog.")
+			fov_recompute = True
+		if player.fighter.sprint == 2:
+			ann_passive_actions.append("You move quickly, breathing raggedly as you run.")
+			fov_recompute = True
+		if player.fighter.sprint == 3:
+			ann_passive_actions.append("You bolt madly, your feet flying along the ground.")
+			fov_recompute = True
+		if player.fighter.sprint > 3:
+			player.fighter.sprint = 0
+			ann_passive_actions.append("You walk at a steady, slow pace.")
+			fov_recompute = True
+	def search(x, y):
+		global search_mode
+		x = x + player.x
+		y = y + player.y
+		if search_mode == True: 
+				search_mode = False
+				if map.map_map[x][y].searchable == True:
+					print "derp!"
+					player_action = 'didnt_take_turn'
+	#Movement Keys
+	if game_state == 'playing':
+		x = player.x
+		y = player.y
+		player_moved = True
+		#movement keys
+		if lbc.console_is_key_pressed(lbc.KEY_KP8):
+			if look_mode == False:
+				player_move_or_attack(0,-1)
+			if look_mode == True:
+				look_move(0,-1)
+				fov_recompute = True
+				return 'didnt-take-turn'
+			search(0, -1)
+		elif lbc.console_is_key_pressed(lbc.KEY_UP):
+			if look_mode == False:
+				player_move_or_attack(0,-1)
+			if look_mode == True:
+				look_move(0,-1)
+				fov_recompute = True
+				return 'didnt-take-turn'
+		elif lbc.console_is_key_pressed(lbc.KEY_KP2):
+			if look_mode == False:
+				player_move_or_attack(0,1)
+			if look_mode == True:
+				look_move(0,1)
+				fov_recompute = True
+				return 'didnt-take-turn'
+		elif lbc.console_is_key_pressed(lbc.KEY_DOWN):
+			if look_mode == False:
+				player_move_or_attack(0,1)
+			if look_mode == True:
+				look_move(0,1)
+				fov_recompute = True
+				return 'didnt-take-turn'
+		elif lbc.console_is_key_pressed(lbc.KEY_KP4):
+			if look_mode == False:
+				player_move_or_attack(-1,0)
+			if look_mode == True:
+				look_move(-1,0)
+				fov_recompute = True
+				return 'didnt-take-turn'
+		elif lbc.console_is_key_pressed(lbc.KEY_LEFT):
+			if look_mode == False:
+				player_move_or_attack(-1,0)
+			if look_mode == True:
+				look_move(-1,0)
+				fov_recompute = True
+				return 'didnt-take-turn'
+		elif lbc.console_is_key_pressed(lbc.KEY_KP6):
+			if look_mode == False:
+				player_move_or_attack(1,0)
+			if look_mode == True:
+				look_move(1,0)
+				fov_recompute = True
+				return 'didnt-take-turn'
+		elif lbc.console_is_key_pressed(lbc.KEY_RIGHT):
+			if look_mode == False:
+				player_move_or_attack(1,0)
+			if look_mode == True:
+				look_move(1,0)
+				fov_recompute = True
+				return 'didnt-take-turn'
+		elif lbc.console_is_key_pressed(lbc.KEY_KP1):
+			if look_mode == False:
+				player_move_or_attack(-1,1)
+			if look_mode == True:
+				look_move(-1,1)
+				fov_recompute = True
+				return 'didnt-take-turn'
+		elif lbc.console_is_key_pressed(lbc.KEY_KP3):
+			if look_mode == False:
+				player_move_or_attack(1,1)
+			if look_mode == True:
+				look_move(1,1)
+				fov_recompute = True
+				return 'didnt-take-turn'
+		elif lbc.console_is_key_pressed(lbc.KEY_KP7):
+			if look_mode == False:
+				player_move_or_attack(-1,-1)
+			if look_mode == True:
+				look_move(-1,-1)
+				fov_recompute = True
+				return 'didnt-take-turn'
+		elif lbc.console_is_key_pressed(lbc.KEY_KP9):
+			if look_mode == False:
+				player_move_or_attack(1,-1)
+			if look_mode == True:
+				look_move(1,-1)
+				fov_recompute = True
+				return 'didnt-take-turn'
+		elif lbc.console_is_key_pressed(lbc.KEY_KP5):
+			if look_mode == False:
+				player_move_or_attack(0, 0) 
+				fov_recompute = True
+				player_moved = False
+			if look_mode == True:
+				return 'didnt-take-turn'
+		else:
+			return 'didnt-take-turn'
+		
+
+def look():
+	lookie.x = player.x
+	lookie.y = player.y
+
+def look_move(dx,dy):
+	global look_mode
+	if look_mode == True:
+		x = lookie.x + dx
+		y = lookie.y + dy
+		if x < map.map_width:
+			if y <map.map_height:
+				if y >= 0:
+					if x >= 0:
+						lookie.move_noblock(dx, dy)
+
+ann_look = []
+
+def look_read():
+	global look_mode
+	names = []
+	if look_mode == True:
+		names = [obj.name for obj in items.objects_list
+			if obj.x == lookie.x and obj.y == lookie.y and obj.name != 'Looker']
+	num = 0
+	libtcod.console_set_foreground_color(0, lbc.light_grey)
+	lbc.console_print_center(0, 68, 45, lbc.BKGND_NONE, "Look Mode: ")
+	for x in names:
+		num += 1
+		lbc.console_print_center(0, 68, 46 + num, lbc.BKGND_NONE, x)
+	libtcod.console_set_foreground_color(0, lbc.dark_cyan)
+	lbc.console_print_center(0, 68, 47 + num, lbc.BKGND_NONE, str(map.map_map[lookie.x][lookie.y].name))
+
+
+###########
+#Rendering#
+###########
+
+def render_all():
+	global fov_map, color_dark_wall, color_light_wall
+	global color_dark_ground, color_light_ground
+	global fov_recompute
+	global inventory_mode
+	screen_gui_limit_y = 0
+	screen_gui_limit_x = 0
+	def render_overmap():
+		for y in xrange(0, overmap_height-1):
+				for x in xrange(0, overmap_width-1):
+					lbc.console_set_char(overmap_con, x, y, overmap.overmap_map[x][y].chara)
+					lbc.console_set_back(overmap_con, x, y, overmap.overmap_map[x][y].color_back, libtcod.BKGND_SET)
+					if overmap.abandoned_map[x][y] != True:
+						lbc.console_set_fore(overmap_con, x, y, overmap.overmap_map[x][y].color_front)
+					elif overmap.abandoned_map[x][y] == True:
+						lbc.console_set_fore(overmap_con, x, y, lbc.darker_yellow)
+		lbc.console_set_fore(overmap_con, player.overmapx, player.overmapy, player.color_front)
+		lbc.console_set_char(overmap_con, player.overmapx, player.overmapy, player.char)
+		libtcod.console_blit(overmap_con, 0, 0, con_info.display_width, con_info.display_height, 0, 0, 0)
+
+	if map.map_height > con_info.screen_height - 10:
+		screen_gui_limit_y = con_info.screen_height - 10 - map.map_height
+	if map.map_width > con_info.screen_width - 8:
+		screen_gui_limit_x = con_info.screen_width - 8 - map.map_width
+
+	if fov_recompute:
+		#recompute FOV if needed (the player moved or something)
+		fov_recompute = False
+		libtcod.map_compute_fov(map.fov_map, (player.x), (player.y), int(torch_radius), FOV_LIGHT_WALLS, 1)
+		
+		#go through all tiles, and set their background color according to the FOV
+		for y in xrange(map.starty, con_info.display_height+map.starty):
+			for x in xrange(map.startx, con_info.display_width+map.startx):
+				visible = libtcod.map_is_in_fov(map.fov_map, x, y)
+				wall = map.map_map[x][y].blocked
+				
+				if visible:
+					lbc.console_set_fore(con_info.con, x-map.startx, y-map.starty, map.map_map[x][y].color_front)
+					lbc.console_set_char(con_info.con, x-map.startx, y-map.starty, map.map_map[x][y].chara)
+					libtcod.console_set_back(con_info.con, x-map.startx, y-map.starty, map.map_map[x][y].color_back, libtcod.BKGND_SET)
+				if not visible:
+					lbc.console_set_fore(con_info.con, x-map.startx, y-map.starty, lbc.Color(75, 75, 75))
+					lbc.console_set_char(con_info.con, x-map.startx, y-map.starty, map.map_map[x][y].chara)
+					libtcod.console_set_back(con_info.con, x-map.startx, y-map.starty, lbc.Color(40, 40, 40), libtcod.BKGND_SET)
+				if look_mode == True:
+					libtcod.console_set_back(con_info.con, lookie.x-map.startx, lookie.y-map.starty, lbc.light_red, lbc.BKGND_SET)
+		if overmap_mode == True:
+			render_overmap()
+			
+			
+			
+	#draw all objects in the list
+		for object in items.objects_list:
+			if object != player:
+				object.draw()
+		player.draw()
+		if look_mode == True:
+			lookie.draw()
+	if overmap_mode == False:
+		libtcod.console_blit(con_info.con, 0, 0, con_info.display_width, con_info.display_height, 0, 0, 0)
+
+def clock_move():
+	global time_minute, time_hour, am, torch_radius, speed, am_changed
+	#Controls whether a monster can move during a turn based on their speed.
+	#Calculates the multipliers based on the player's chosen movement speed.
+	if player.fighter.sprint == 0:
+		player.fighter.speed = .65
+	elif player.fighter.sprint == 1:
+		player.fighter.speed = 1
+	elif player.fighter.sprint == 2:
+		player.fighter.speed = 1.2
+	elif player.fighter.sprint == 3:
+		player.fighter.speed = 1.45
+	time_minute = time_minute + .25/player.fighter.speed
+	if time_minute >= 60:
+		time_hour = time_hour + 1
+		time_minute = 0 + time_minute-60
+	if time_hour == 12:
+		if am_changed == 0:
+			am = not am
+			am_changed = 1
+	if time_hour == 3:
+		am_changed = 0
+	if time_hour > 12:
+		time_hour = 1
+		time_minute = 0
+	if am == True:
+		if time_hour >= 6:
+			if time_hour < 12:
+				torch_radius = torch_radius + .32 * player.fighter.speed
+	if am == False:
+		if time_hour >= 8:
+			if time_hour < 12:
+				if torch_radius >= 6:
+					torch_radius = torch_radius - .32 * player.fighter.speed
+
+###########
+#GUI Stuff#
+###########
+
+def render_gui():
+	global attack_mode_stat_string
+	global inventory_menu
+	global player_moved
+	attack_mode_stat_string = ' '
+	#Name
+	libtcod.console_set_foreground_color(0, libtcod.light_blue)
+	lbc.console_print_center(0, con_info.screen_width - 12, 0, lbc.BKGND_NONE, 'Vagabond Version 0.01')
+	#Health Display
+	def name_hp(part):
+		if part[0] >= part[1]:
+			status = 'Fine'
+			return status
+		if part[0] < part[1]:
+			if part[0] >= part[1]*.75:
+				status = 'Good'
+				return status
+			if part[0] >= part[1]*.5:
+				if part[0] < part[1]*.75:
+					status = 'Okay'
+					return status
+			if part[0] >= part[1]*.25:
+				if part[0] < part[1]*.5:
+					status = 'Poor'
+					return status
+			if part[0] < part[1]*.25:
+				if part[0] > 0:
+					status = 'DANG'
+					return status
+			if part[0] <= 0:
+				status = 'Lost'
+				return status
+	libtcod.console_set_foreground_color(0, libtcod.light_orange)
+	libtcod.console_print_right(0, con_info.screen_width - 1, con_info.screen_height - 10, libtcod.BKGND_NONE, 'Head Body lArm rArm lLeg rLeg')
+	libtcod.console_set_foreground_color(0, libtcod.green)
+	libtcod.console_print_right(0, con_info.screen_width - 1, con_info.screen_height - 9, libtcod.BKGND_NONE,  str(name_hp(player.fighter.head_hp)) + ' ' + str(name_hp(player.fighter.torso_hp)) + ' ' + str(name_hp(player.fighter.lArm_hp)) + ' ' + str(name_hp(player.fighter.rArm_hp)) + ' ' + str(name_hp(player.fighter.lLeg_hp)) + ' ' + str(name_hp(player.fighter.rLeg_hp)))
+	#Attack Mode Indicator
+	if player.fighter.attack_mode_stat == True:
+		attack_mode_stat_string = 'On '
+	elif player.fighter.attack_mode_stat == False:
+		attack_mode_stat_string = 'Off'
+	libtcod.console_set_foreground_color(0, libtcod.light_blue)
+	lbc.console_print_left(0, con_info.screen_width - 13, con_info.screen_height - 3, lbc.BKGND_NONE, 'Atk mode:' + str(attack_mode_stat_string))
+	#Targeting Indicator
+	lbc.console_print_left(0, con_info.screen_width - 13, con_info.screen_height -7, lbc.BKGND_NONE, '           o ')
+	lbc.console_print_left(0, con_info.screen_width - 13, con_info.screen_height -6, lbc.BKGND_NONE, 'Targeted: /@''\\')
+	lbc.console_print_left(0, con_info.screen_width - 13, con_info.screen_height -5, lbc.BKGND_NONE, '          / \\' )
+	#Sprint Indicator
+	if player.fighter.sprint == 0:
+		sprint_string = ' Walk.'
+	elif player.fighter.sprint == 1:
+		sprint_string = ' Run. '
+	elif player.fighter.sprint == 2:
+		sprint_string = ' RUN. '
+	elif player.fighter.sprint == 3:
+		sprint_string = ' RUN! '
+	libtcod.console_set_foreground_color(0, libtcod.light_green)
+	lbc.console_print_left(0, con_info.screen_width - 13, con_info.screen_height - 2, lbc.BKGND_NONE, 'Speed:' + str(sprint_string))
+	#Coords
+	libtcod.console_set_foreground_color(0, libtcod.dark_grey)
+	lbc.console_print_right(0, con_info.screen_width - 9, 14, lbc.BKGND_NONE, '        ')
+	lbc.console_print_right(0, con_info.screen_width - 9, 14, lbc. BKGND_NONE, str(player.overmapx) + 'x ' + str(player.overmapy) + 'y')
+	#Clock
+	libtcod.console_set_foreground_color(0, libtcod.dark_grey)
+	lbc.console_print_right(0, con_info.screen_width - 9, 4, lbc.BKGND_NONE, '        ')
+	if time_minute >= 10: 
+		if am == True:
+			lbc.console_print_right(0, con_info.screen_width - 9, 4, lbc. BKGND_NONE, str(time_hour) + ":" + str(int(time_minute)) + " AM")
+		if am == False:
+			lbc.console_print_right(0, con_info.screen_width - 9, 4, lbc. BKGND_NONE, str(time_hour) + ":" + str(int(time_minute)) + " PM")
+	elif time_minute < 10: 
+		if am == True:
+			lbc.console_print_right(0, con_info.screen_width - 9, 4, lbc. BKGND_NONE, str(time_hour) + ":" + "0" + str(int(time_minute)) + " AM")
+		if am == False:
+			lbc.console_print_right(0, con_info.screen_width - 9, 4, lbc. BKGND_NONE, str(time_hour) + ":" + "0" + str(int(time_minute)) + " PM")
+	#Minimap
+	for x in xrange(con_info.screen_width - 17, con_info.screen_width - 6):
+		for y in xrange(4, 15):
+			lbc.console_set_back(0, x, y, lbc.grey)
+	lbc.console_blit(overmap_con, player.overmapx - 3, player.overmapy - 3, 7, 7, 0, con_info.screen_width - 15, 6)
+	#Items on your tile
+	current_tile = []
+	line = "You see "
+	q = 0
+	if game_state == 'playing' and player_action != 'didnt-take-turn':
+		if player_moved == True:
+			for z in items.objects_list:
+				if z.name != 'Looker' or z.name != "Player":
+					if z.x == player.x and z.y == player.y:
+						current_tile.append(z)
+						q += 1
+						r = q
+			if q == 1:
+				ann_look.append("You see a " + current_tile[0].name + ".")
+			if q > 3:
+				ann_look.append("You see several items.")
+			elif q > 1:
+				for z in current_tile:
+					if r == 1:
+						line = line + "and a " + z.name + "."
+						r = 0
+					if r > 1:
+						line = line + "a " + z.name + ", "
+						r -= 1
+				ann_look.append(line)
+
+def inv_menu():
+	global inventory_mode
+	global index
+	if inventory_mode == True:
+		inventory_menu('Press the key next to an item to use it, or any other to cancel.\n')
+
+def inventory_menu(header):
+	global index
+	render_gui()
+	print_announcements()
+	#show a menu with each item of the inventory as an option
+	if len(items.inventory) == 0:
+		options = ['Inventory is empty.']
+	else:
+		options = [item.name for item in items.inventory]
+	index = menu(header, options, 30, 18, 25)
+
+def drop_menu():
+	global inventory_mode
+	global index
+	if drop_mode == True:
+		inventory_menu('Press the key next to an item to drop it, or any other to cancel.\n')
+		items.inventory[index].x = player.x
+		items.inventory[index].y = player.y
+		items.inventory[index].item.drop()
+
+def print_announcements():
+	global top
+	top = len(NPC.ann_dialog) + len(ann_combatd1) + len(ann_combatd0) + len(ann_passive_actions) + len(ann_combatdeath) + len(ann_exit) + len(items.ann_item_actions) + len(ann_look)
+	x = 0
+	while len(total)+top > 8:
+		x = x + 1
+		total.pop(x - 1)
+	#If there are one or more things to be printed...
+	if len(total) >= 1:
+		#For the range of however many things there are to be printed...
+		for x in xrange(len(total)):
+			libtcod.console_set_foreground_color(0, libtcod.grey)
+			lbc.console_print_left(0, 0, con_info.screen_height - len(total) + x - top, lbc.BKGND_NONE, '                                                                  ')
+			lbc.console_print_left(0, 0, con_info.screen_height - 1, lbc.BKGND_NONE, '                                                                  ')
+			lbc.console_print_left(0, 0, con_info.screen_height - len(total) + x - top, lbc.BKGND_NONE, total[x])
+	def announce(ann, color):
+		global top
+		while len(ann) >= 1:
+			libtcod.console_set_foreground_color(0, color)
+			newline = ann.pop()
+			total.append(newline)
+			lbc.console_print_left(0, 0, con_info.screen_height - top, lbc.BKGND_NONE, str(newline))
+			top = top - 1
+	announce(ann_passive_actions, lbc.light_blue)
+	announce(NPC.ann_dialog, lbc.light_green)
+	announce(ann_combatd1, lbc.red)
+	announce(ann_combatd0, lbc.light_red)
+	announce(ann_combatdeath, lbc.light_violet)
+	announce(ann_exit, lbc.red)
+	announce(items.ann_item_actions, lbc.Color(0,175,0))
+	announce(ann_look, lbc.grey)
+
+
+
+
+
+
+# # # # # # # # #
+#Initialization #
+# # # # # # # # #
+
+lbc.console_set_custom_font('prestige12x12_gs_tc.png', lbc.FONT_TYPE_GREYSCALE | lbc.FONT_LAYOUT_TCOD)
+lbc.console_init_root(con_info.screen_width, con_info.screen_height, 'Vagabond', False)
+lbc.sys_set_fps(LIMIT_FPS)
+black = lbc.console_new(con_info.screen_width, con_info.screen_height)
+
+def main_menu():
+	global img, back
+	
+	def msgbox(text, width=50):
+		menu(text, [], width, x = con_info.screen_width/2 - width/2, y = con_info.screen_height/2)  #use menu() as a sort of "message box"
+	img_num = 'backg' + str(lbc.random_get_int(0,1,10)) + '.png'
+	img = lbc.image_load(img_num)
+	
+	while not lbc.console_is_window_closed():
+		if back == True:
+			lbc.console_blit(black, 0, 0, con_info.screen_width, con_info.screen_height, 0, 0, 0)
+			lbc.image_blit_2x(img, 0, 0, 0)
+		choice = menu('       Vagabond', [' ', 'Start a new world', ' ', 'Continue last world', ' ', 'Quit', ' '], 24, x = con_info.screen_width/2 - 12, y = con_info.screen_height)
+		if choice == 0:
+			back = False
+			new_game()
+			play_game()
+			break
+		if choice == 1:  #load last game
+			
+			try:
+				load_game()
+			except:
+				msgbox('\n No saved game to load.\n', 24)
+				continue
+				choice = 4
+			play_game()
+			back = False
+		if choice == 2:
+			break
+		if choice == 3:
+			main_menu()
+			break
+
+
+def menu(header, options, width, x, y = 1):
+	global fov_recompute, inventory_mode
+	if len(options) > 26: raise ValueError('Cannot have a menu with more than 26 options.')
+ 
+    #calculate total height for the header (after auto-wrap) and one line per option
+	header_height = libtcod.console_height_left_rect(con_info.con, 0, 0, width, con_info.screen_height, header)
+	if header == '':
+		header_height = 0
+	height = len(options) + header_height
+ 
+    #create an off-screen console that represents the menu's window
+	window = libtcod.console_new(width, height)
+ 
+    #print the header, with auto-wrap
+	libtcod.console_set_foreground_color(window, libtcod.white)
+	libtcod.console_print_left_rect(window, 0, 0, width, height, libtcod.BKGND_NONE, header)
+ 
+    #print all the options
+	y = header_height
+	letter_index = ord('a')
+	for option_text in options:
+		if option_text == ' ':
+			text = '   '
+			libtcod.console_print_left(window, 0, y, libtcod.BKGND_NONE, text)
+			y += 1
+		elif option_text != ' ':
+			text = '(' + chr(letter_index) + ') ' + option_text
+			libtcod.console_print_left(window, 0, y, libtcod.BKGND_NONE, text)
+			y += 1
+			letter_index += 1
+	#blit the contents of "window" to the root console
+	def stuff():
+		if y <= 24:
+			libtcod.console_blit(window, 0, 0, width, height, 0, x, 25 - y, 1.0, 0.7)
+		elif y > 24:
+			libtcod.console_blit(window, 0, 0, width, height, 0, x, 1, 1.0, 0.7)
+	stuff()
+    #present the root console to the player and wait for a key-press
+	libtcod.console_flush()
+	key = libtcod.console_wait_for_keypress(True)
+ 
+	if key.vk == libtcod.KEY_ENTER and key.lalt:  #(special case) Alt+Enter: toggle fullscreen
+		libtcod.console_set_fullscreen(not libtcod.console_is_fullscreen())
+    #convert the ASCII code to an index; if it corresponds to an option, return it
+	index = key.c - ord('a')
+	
+	if index >= 0 and index < len(options): 
+		return index
+	return None
+
+def new_game():
+	global player, objects, lookie, game_running
+	
+	fighter_player = NPC.Fighter(body = "body_def", hp=55, defense=6, power=6, speed = 1, sprint = 0, death_function=NPC.player_death, attack_mode_stat = True)
+	player = items.Object(0, 0, '@', 'Player', libtcod.white, overmapx = overmap_width/2, overmapy = overmap_height/2, blocks = True, fighter=fighter_player)
+	reset_clock()
+	game_running = True
+	lookie = items.Object(player.x, player.y, ' ', 'Looker', map.color_lookie, blocks=False)
+	items.objects_list.append(lookie)
+	overmap.make_overmap()
+	map.make_map(player.overmapx, player.overmapy)
+	map.startx = map.map_width/2 - con_info.display_width/2
+	map.starty = map.map_height/2 - con_info.display_height/2
+	player.x = map.map_width/2
+	player.y = map.map_height/2
+	map.initialize_fov()
+	NPC.place_npcs(player.overmapx, player.overmapy)
+	fov_recompute = True
+	render_all()
+	render_gui()
+	lbc.console_flush()
+
+def save_game():
+	file = shelve.open('save/savegame', 'n')
+	file['map'] = map.map_map
+	file['overmap'] = overmap.overmap_map
+	file['objects'] = items.objects_list
+	file['player_index'] = player
+	file['game_state'] = game_state
+	file.close()
+
+def load_game():
+	global map, objects, player, game_running
+	game_running = True
+	file = shelve.open('save/savegame', 'r')
+	map.map_map = file['map']
+	overmap.overmap_map = file['overmap']
+	items.objects_list = file['objects']
+	player = items.objects_list[file['player_index']]
+	game_state = file['game_state']
+	file.close()
+	map.initialize_fov()
+
+def play_game():
+	global player_action, lookie, choice, game_running
+	while not lbc.console_is_window_closed():
+		print 
+		while game_running == True:
+			lbc.console_blit(black, 0, 0, con_info.screen_width, con_info.screen_height, 0, 0, 0)
+			if game_state == 'playing' and player_action != 'didnt-take-turn':
+				clock_move()
+			
+			if look_mode == True:
+				look_read()
+			camera_move()
+			render_all()
+			render_gui()
+			print_announcements()
+			if player_action == 'exit':
+				back = True
+				save_game()
+				lbc.console_flush()
+				game_running = False
+				main_menu()
+				choice = 3
+				sys.exit()
+			if game_state == 'playing' and player_action != 'didnt-take-turn':
+				for object in items.objects_list:
+					if object.ai:
+						object.ai.take_turn()
+			lbc.console_flush()
+			player_action = handle_keys()
+
+main_menu()

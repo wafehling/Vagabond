@@ -1,0 +1,2 @@
+num = "                                                                                "
+print len(num)

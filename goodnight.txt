@@ -1,0 +1,4 @@
+def say_goodnight("name"):
+	print "Goodnight, " + name + "."
+say_goodnight("John-Boy")
+say_goodnight("Mary-Ellen")

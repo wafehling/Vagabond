@@ -1,0 +1,12 @@
+janitor
+shop owner
+retail worker
+bank teller
+transient
+gang member
+punk
+construction worker
+business worker
+day laborer
+thief
+beggar
